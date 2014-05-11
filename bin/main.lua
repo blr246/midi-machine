@@ -20,7 +20,6 @@ package.path = mod_pattern..";"..script_pattern..";"..package.path
 require 'mid'
 require 'models'
 require 'nn'
-require 'PerceptualLoss'
 require 'Rnn'
 
 --[
@@ -60,6 +59,9 @@ files.
                    iso - isolated, features apply to a single note
                    cmb - combined, features apply across notes
                    iso+cmb - isolated features combined across notes
+  -c, --custom-labels (string) custom labels to insert at the end of the
+                      output filenames (ex "lr-1e-4-mb-5k" if we were
+                      experimenting with learning rate and minibatch size)
   <INPUT_DIR> (string) directory where input *.mid files reside
   <TIME_SIG_CHANNELS_GCD> (string) time signature, channels, and gcd
                           e.g. 4/2-8-24-4-256
@@ -92,7 +94,7 @@ for key, value in pairs(args) do
 end
 
 -- Generate date string used to label model and test midi.
-date_str = os.date("%Y%m%d_%H%M%S")
+local date_str = os.date("%Y%m%d_%H%M%S")
 print('Date string: '..date_str)
 print('Num training: '..ds.data_train():size())
 
@@ -105,11 +107,12 @@ if "iso" == args.model_type then
     train_args = { learning_rate = 1e-2, learning_rate_decay = 0.1 }
 elseif "cmb" == args.model_type then
     model = models.simple_2lnn_cmb(ds, args.hidden_units)
-    train_args = { learning_rate = 1e-4, mini_batch_size = 200, learning_rate_decay = 0.3 }
+    train_args = { learning_rate = 1e-2, learning_rate_decay = 0.1 }
 elseif "iso+cmb" == args.model_type then
     model = models.simple_2lnn_iso_cmb(ds, args.hidden_units)
-    train_args = { learning_rate = 1e-4, mini_batch_size = 200, learning_rate_decay = 0.3 }
+    train_args = { learning_rate = 1e-2, learning_rate_decay = 0.3 }
 end
+
 
 -- Create RNN when requested.
 local train_model
@@ -122,17 +125,40 @@ else
     model_type = "2lnn-"..args.model_type
 end
 
-local to_byte = mid.dataset.default_to_byte
 local criterion = nn.MSECriterion()
---local criterion = nn.AbsCriterion()
---local criterion = nn.PerceptualLoss(to_byte)
 
--- Initilaize weights but first run newtork to size Tensors.
-criterion:forward(train_model:forward(ds.points[1][1]), ds.points[1][2])
-train_model:reset(1e-1)
+-- Initialize weights.
+local stdv = 1.0
+local initialized = false
+while not initialized do
+
+    local num_good = 0
+    local data = ds.data_train()
+    for i = 1, data:size() do
+        model:reset(stdv)
+        local loss = criterion:forward(train_model:forward(data[i][1]), data[i][2])
+        if num_good > 100 then
+            initialized = true
+            break
+        elseif loss == loss
+            and loss < data[i][2]:nElement() then
+            num_good = num_good + 1
+        else
+            stdv = stdv / 2
+            num_good = 0
+        end
+    end
+end
+print("Initialized weights stdv="..stdv)
+
+-- Set max iterations based on points in the dataset.
+train_args.max_iteration = math.ceil(1e5 / (args.output_window_size * ds.num_train))
+
+-- Get point that we will use to generate a song.
+local gen_x0 = ds.data_test()[1][1]:narrow(2, 1, args.input_window_size)
 
 -- Train.
-err_train, err_test = models.train_model(ds, train_model, criterion, train_args)
+local err_train, err_test = models.train_model(ds, train_model, criterion, train_args)
 print("avg error train/test", err_train, err_test)
 
 -- Append command-line options to the model.
@@ -141,19 +167,20 @@ for key, value in pairs(args) do
 end
 
 -- Write out the model.
-model_filename = 'model-'..model_type..args.hidden_units..'-'..date_str
-model_output_path = path.join(args.OUTPUT_DIR, model_filename)
+local model_filename = 'model-'..model_type..args.hidden_units..'-'..date_str
+if args.custom_labels ~= nil then
+    model_filename = model_filename.."-"..args.custom_labels
+end
+local model_output_path = path.join(args.OUTPUT_DIR, model_filename)
 torch.save(model_output_path, model)
 print("Wrote model "..model_output_path)
 
 -- Generate a song.
-song_data = models.predict(model,
-                           ds.data_test()[1][1]:narrow(2, 1, args.input_window_size),
-                           10)
-song = mid.dataset.compose(ds.sources[1], song_data, 4)
+local song_data = models.predict(model, gen_x0, 10)
+local song = mid.dataset.compose(ds.sources[1], song_data, 4)
 
 -- Write out generated song.
-gen_filename = 'gen-'..date_str..'.mid'
-gen_output_path = path.join(args.OUTPUT_DIR, gen_filename)
+local gen_filename = 'gen-'..date_str..'.mid'
+local gen_output_path = path.join(args.OUTPUT_DIR, gen_filename)
 mid.data.write(song.middata, io.open(gen_output_path, 'w'))
 print("Wrote song "..gen_output_path)

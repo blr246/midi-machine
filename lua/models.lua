@@ -29,8 +29,7 @@ function models.simple_2lnn_iso(ds, num_hidden)
 
     local mlp = models.append_ds_info(ds, nn.Sequential())
     mlp:add(nn.Linear(mlp.dims.input[2], num_hidden))
-    --mlp:add(nn.RluMax())
-    mlp:add(nn.Tanh())
+    mlp:add(nn.RluMax())
     mlp:add(nn.Linear(num_hidden, mlp.dims.output[2]))
 
     return mlp
@@ -48,8 +47,7 @@ function models.simple_2lnn_cmb(ds, num_hidden)
     -- By transposing, we extract features over the notes for each time slice.
     mlp:add(nn.Transpose({1, 2}))
     mlp:add(nn.Linear(num_notes, num_hidden))
-    --mlp:add(nn.RluMax())
-    mlp:add(nn.Tanh())
+    mlp:add(nn.RluMax())
     -- Flatten the network.
     local flattened_len = mlp.dims.input[2] * num_hidden
     mlp:add(nn.Reshape(flattened_len))
@@ -70,8 +68,7 @@ function models.simple_2lnn_iso_cmb(ds, num_hidden)
     local mlp = models.append_ds_info(ds, nn.Sequential())
     local num_notes = mlp.dims.input[1]
     mlp:add(nn.Linear(mlp.input.dims[2], num_hidden))
-    --mlp:add(nn.RluMax())
-    mlp:add(nn.Tanh())
+    mlp:add(nn.RluMax())
     -- Flatten the network.
     local flattened_len = num_notes * num_hidden
     mlp:add(nn.Reshape(flattened_len))
@@ -86,16 +83,14 @@ end
 function models.train_model(ds, model, criterion, train_args)
 
     local train = ds.data_train()
-    --local trainer = nn.StochasticGradient(model, criterion)
     local trainer = nn.SgdMomentum(model, criterion, train_args)
-    --trainer.maxIteration = 2
     trainer:train(train)
 
     local train_loss = 0
     for i = 1, train:size() do
-        X = train[i][1]
-        Y = train[i][2]
-        loss = criterion:forward(model:forward(X), Y)
+        local X = train[i][1]
+        local Y = train[i][2]
+        local loss = criterion:forward(model:forward(X), Y)
         train_loss = train_loss + loss
     end
     local avg_train_loss = train_loss / train:size()
@@ -117,10 +112,17 @@ end
 -- :param number length: the length of the song in output windows
 function models.predict(model, x0, length)
 
-    local input_wnd = x0:size(2)
-    local output_wnd =  model:forward(x0):size(2)
+    if x0:size(1) ~= model.dims.input[1]
+        or x0:size(2) ~= model.dims.input[2] then
+        error(string.format("Seed point has incorrect dims (%d, %d) != (%d, %d)",
+                            x0:size(1), x0:size(2),
+                            model.dims.input[1], model.dims.input[2]))
+    end
 
-    local channel_dims = x0:size(1)
+    local input_wnd = model.dims.input[2]
+    local output_wnd =  model.dims.output[2]
+
+    local channel_dims = model.dims.input[1]
     local total_length = input_wnd + (output_wnd * length)
     local x0_song = torch.Tensor(channel_dims, total_length)
     local song = x0_song:narrow(2, input_wnd + 1, output_wnd * length)

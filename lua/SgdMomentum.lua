@@ -79,18 +79,19 @@ function SgdMomentum:train(dataset)
     local total_point_counter = 0
     while true do
 
-        local current_error = 0
-        for t = 1,dataset:size() do
+        local current_loss = 0
+        for t = 1, dataset:size() do
             local example = dataset[shuffled_indices[t]]
             local X = example[1]
             local Y = example[2]
             total_point_counter = total_point_counter + 1
 
-            current_error = current_error + criterion:forward(module:forward(X), Y)
-            if current_error ~= current_error
-                or current_error == math.huge
-                or current_error < 0 then
-                error("Error: current_error="..current_error
+            local losst = criterion:forward(module:forward(X), Y)
+            current_loss = current_loss +  losst
+            if current_loss ~= current_loss
+                or current_loss == math.huge
+                or losst < 0 then
+                error("Error: losst="..losst..", current_loss="..current_loss
                       .." after processing "..total_point_counter.." points")
             end
             module:updateGradInput(X, criterion:updateGradInput(module.output, Y))
@@ -117,7 +118,7 @@ function SgdMomentum:train(dataset)
             if 0 == (total_point_counter % self.mini_batch_size) then
                 mini_batch_idx = mini_batch_idx + 1
                 current_learning_rate =
-                self.learning_rate / (1 + (mini_batch_idx * self.learning_rate_decay))
+                    self.learning_rate / (1 + (mini_batch_idx * self.learning_rate_decay))
             end
 
             local telapsed = os.time() - tstart
@@ -152,19 +153,19 @@ function SgdMomentum:train(dataset)
             self.hookIteration(self, iteration)
         end
 
-        current_error = current_error / dataset:size()
-        print("# current error = "..current_error)
+        local avg_current_loss = current_loss / dataset:size()
+        print("# avg loss = "..avg_current_loss)
 
         -- Check convergence (expect decrease).
-        local err_delta = err_prev - current_error
+        local err_delta = err_prev - avg_current_loss
         if err_delta >= 0 and err_delta < self.converge_eps then
             print("# SgdMomentum: converged after "..iteration.." iterations")
             break
         elseif err_delta < 0 then
-            print("# SgdMomentum: WARNING : error increased by "
+            print("# SgdMomentum: WARNING : avg loss increased by "
                   ..(-err_delta).." on iteration "..iteration)
         end
-        err_prev = current_error
+        err_prev = avg_current_loss
 
         if self.max_iteration > 0 and iteration >= self.max_iteration then
             print("# SgdMomentum: you have reached the maximum number of iterations")
