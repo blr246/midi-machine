@@ -106,7 +106,7 @@ QUESTIONS
    data have a matrix representation of size 10x15 at some layer L_3. You could
    concatenate some hidden state of size 3x15 to give an augmented state of
    size 13x15 at L_3. Then, at some layer L_K with K > 3, extract some state
-   whose nElements() == 3x15 = 45. Recur this processed hidden state into the
+   whose nElement() == 3x15 = 45. Recur this processed hidden state into the
    network at L_3 on the next unrolling. Note that you will need to initialize
    randomly the hidden state whenever you run your network in feed-forward mode
    to generate a song.

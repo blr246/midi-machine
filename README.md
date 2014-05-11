@@ -79,6 +79,22 @@ number of time steps to generate. The script will save generated songs to the
 
 Note that `jukebox.sh` is a wrapper for `compose.lua`.
 
+### Some reasonable examples
+To generate some machines that make reasonable music, try
+
+```
+$ th bin/main.lua -h 32 -t iso -o 5 -s 0.2 -w l2 midi/ 4/2-8-24-4-512 experiments/
+```
+
+or
+
+```
+$ th bin/main.lua -h 32 -t iso -o 20 -r -s 0.2 -w l2 midi/ 4/2-8-24-4-512 experiments/
+```
+
+Note where the example song and model are saved. You can play the example song
+with `timidity` or use it with `./bin/jukebox.sh` to generate songs.
+
 The mid library
 ---------------
 A major component of the `midi-machine` is the `mid` library located in the

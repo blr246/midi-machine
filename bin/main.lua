@@ -21,47 +21,86 @@ require 'mid'
 require 'models'
 require 'nn'
 require 'Rnn'
+require 'PerceptualLoss'
 
---[
--- TODO:
---
---   REGRESSION
---   a) Create simple deep network predicting next notes across channels as a
---      form of regression. This simplifies dealing with softmax and class
---      labels on the output, but in general it may be more difficult to get
---      reasonable performance.
---   b) Experiment with the loss function on the regression problem.
---
---   MULTICLASS
---   a) Use K classes to represent note velocity obtained by median filtering
---      the velocity values observed in the training data. Applying softmax
---      to the output gives a simple loss function.
---
---   CONVNET
---   a) Try several deep convnet architectures.
---
---   For all models, experiment with input dimensions (window size) and also
---   output dimensions.
---
---   RECURRENT
---   a) Experiment with the unrolling length.
---]
+---Generate model filename.
+local make_model_filename = function(args, date_str)
+    local fn = 'model'
+    if args.rnn then
+        fn = fn.."-rnn-"
+    else
+        fn = fn.."-2lnn"
+    end
+    fn = fn.."-"..args.model_type
+    if #args.with_reg > 0 then
+        fn = fn.."-reg"..args.with_reg
+    else
+        fn = fn.."-noreg"
+    end
+    fn = fn.."-"..args.hidden_units..'-'..date_str
+    if #args.custom_labels > 0 then
+        fn = fn.."-"..args.custom_labels
+    end
+    return fn
+end
+
+---Compute weight initialization by searching for a value that does not give
+--nan, inf, or very large losses compared to the number of output dims.
+local find_stdv_init_weight = function(data, model, criterion)
+    local stdv = 1.0
+    local initialized = false
+    local num_good = 0
+
+    while not initialized do
+        for i = 1, data:size() do
+            model:reset(stdv)
+            local loss = criterion:forward(model:forward(data[i][1]), data[i][2])
+            if num_good > 100 then
+                initialized = true
+                break
+            elseif loss == loss and loss < data[i][2]:nElement() then
+                num_good = num_good + 1
+            else
+                stdv = stdv / 2
+                num_good = 0
+            end
+        end
+    end
+    return stdv
+end
+
+--- L2 regularizer.
+local l2reg = function(w, gw)
+    local loss = torch.pow(gw, w, 2):sum()
+    torch.mul(gw, w, 2)
+    return loss
+end
+
+--- L1 regularizer.
+local l1reg = function(w, gw)
+    local loss = torch.abs(gw, w):sum()
+    torch.sign(gw, w)
+    return loss
+end
 
 local args = lapp [[
 Train a learning machine to predict sequences of notes extracted from MIDI
 files.
   -i, --input-window-size (default 10) size in gcd ticks of input point X
   -o, --output-window-size (default 1) size in gcd ticks of target point Y
-  -r, --rnn is a recurrent neural network; note that output window must be > 1
-  -s, --dataset-train-split (default 0.9) percentage of data to use for training
-  -h, --hidden-units (default 256) number of 2lnn hidden units
+  -r, --rnn use Recurrent Neural Network; note that output window must be > 1
+  -s, --dataset-train-split (default 0.2) percentage of data to use for training;
+                            *not all models require a lot of data*
+  -h, --hidden-units (default 32) number of 2lnn hidden units
   -t, --model-type (default "iso") model type in {iso, iso+cmb, cmb}
                    iso - isolated, features apply to a single note
                    cmb - combined, features apply across notes
                    iso+cmb - isolated features combined across notes
-  -c, --custom-labels (string) custom labels to insert at the end of the
+  -c, --custom-labels (default "") custom labels to insert at the end of the
                       output filenames (ex "lr-1e-4-mb-5k" if we were
                       experimenting with learning rate and minibatch size)
+  -w, --with-reg (default none) use regularization in {none, l1, l2}
+  -d, --dont-test do not compute test set loss (useful for rapid training)
   <INPUT_DIR> (string) directory where input *.mid files reside
   <TIME_SIG_CHANNELS_GCD> (string) time signature, channels, and gcd
                           e.g. 4/2-8-24-4-256
@@ -69,24 +108,13 @@ files.
                and an example generated song
 ]]
 
-local ds
-if args.rnn then
-    ds = mid.dataset.load_rnn(
-            args.INPUT_DIR,
-            args.TIME_SIG_CHANNELS_GCD, 
-            args.input_window_size,
-            args.output_window_size,
-            args.dataset_train_split
-            )
-else
-    ds = mid.dataset.load(
-            args.INPUT_DIR,
-            args.TIME_SIG_CHANNELS_GCD, 
-            args.input_window_size,
-            args.output_window_size,
-            args.dataset_train_split
-            )
-end
+-- Create dataset depending on RNN.
+local ds_func = args.rnn and mid.dataset.load_rnn or mid.dataset.load
+local ds = ds_func(args.INPUT_DIR,
+                   args.TIME_SIG_CHANNELS_GCD, 
+                   args.input_window_size,
+                   args.output_window_size,
+                   args.dataset_train_split)
 
 -- Show command-line options.
 for key, value in pairs(args) do
@@ -98,64 +126,56 @@ local date_str = os.date("%Y%m%d_%H%M%S")
 print('Date string: '..date_str)
 print('Num training: '..ds.data_train():size())
 
--- Create 2-layer NN with specified hidden units. Each hidden unit is a feature
--- extractor that is applied to an input time slice for a single note.
-local model
-local train_args
+-- Model type requested. Use some default settings for the trainer.
+local model, train_args
 if "iso" == args.model_type then
     model = models.simple_2lnn_iso(ds, args.hidden_units)
-    train_args = { learning_rate = 1e-2, learning_rate_decay = 0.1 }
+    train_args = { learning_rate = 1e-2, mini_batch_size = 5000, learning_rate_decay = 0.1 }
 elseif "cmb" == args.model_type then
     model = models.simple_2lnn_cmb(ds, args.hidden_units)
-    train_args = { learning_rate = 1e-2, learning_rate_decay = 0.1 }
+    local lr = 1 / ds.num_train
+    train_args = { learning_rate = lr, mini_batch_size = 500, learning_rate_decay = 0.1 }
 elseif "iso+cmb" == args.model_type then
     model = models.simple_2lnn_iso_cmb(ds, args.hidden_units)
-    train_args = { learning_rate = 1e-2, learning_rate_decay = 0.3 }
+    local lr = 1 / ds.num_train
+    train_args = { learning_rate = lr, mini_batch_size = 500, learning_rate_decay = 0.1 }
+else
+    error("Error: unknown model type "..args.model_type)
 end
-
 
 -- Create RNN when requested.
-local train_model
-local model_type
-if args.rnn then
-    train_model = nn.Rnn(model)
-    model_type = "rnn-"..args.model_type
-else
-    train_model = model
-    model_type = "2lnn-"..args.model_type
-end
+local train_model = args.rnn and nn.Rnn(model) or model
 
+-- Select criterion and initialize weights.
+--local to_byte = mid.dataset.default_to_byte
+--local criterion = nn.PerceptualLoss(to_byte)
 local criterion = nn.MSECriterion()
-
--- Initialize weights.
-local stdv = 1.0
-local initialized = false
-while not initialized do
-
-    local num_good = 0
-    local data = ds.data_train()
-    for i = 1, data:size() do
-        model:reset(stdv)
-        local loss = criterion:forward(train_model:forward(data[i][1]), data[i][2])
-        if num_good > 100 then
-            initialized = true
-            break
-        elseif loss == loss
-            and loss < data[i][2]:nElement() then
-            num_good = num_good + 1
-        else
-            stdv = stdv / 2
-            num_good = 0
-        end
-    end
-end
-print("Initialized weights stdv="..stdv)
+local stdv = find_stdv_init_weight(ds.data_train(), train_model, criterion)
+train_model:reset(stdv)
+print("reset() weights with stdv="..stdv)
 
 -- Set max iterations based on points in the dataset.
-train_args.max_iteration = math.ceil(1e5 / (args.output_window_size * ds.num_train))
+train_args.max_iteration = math.ceil(1e6 / (args.output_window_size * ds.num_train))
+print("Setting max_iteration="..train_args.max_iteration.." using heuristic; tweak as necessary")
 
 -- Get point that we will use to generate a song.
 local gen_x0 = ds.data_test()[1][1]:narrow(2, 1, args.input_window_size)
+
+-- See if we are not going to test.
+if args.dont_test then
+    ds.data_test = function() return { size = function() return 0 end } end
+    ds.num_test = 0
+    print("Info: clearing test set; test loss will be nan")
+end
+
+-- Get regularizer when requested.
+if args.with_reg == "l1" then
+    train_args.reg = l1reg
+elseif args.with_reg == "l2" then
+    train_args.reg = l2reg
+elseif args.with_reg ~= "none" then
+    error("Error: unknown regularization type "..args.with_reg)
+end
 
 -- Train.
 local err_train, err_test = models.train_model(ds, train_model, criterion, train_args)
@@ -167,10 +187,7 @@ for key, value in pairs(args) do
 end
 
 -- Write out the model.
-local model_filename = 'model-'..model_type..args.hidden_units..'-'..date_str
-if args.custom_labels ~= nil then
-    model_filename = model_filename.."-"..args.custom_labels
-end
+local model_filename = make_model_filename(args, date_str)
 local model_output_path = path.join(args.OUTPUT_DIR, model_filename)
 torch.save(model_output_path, model)
 print("Wrote model "..model_output_path)

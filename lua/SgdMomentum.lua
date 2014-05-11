@@ -17,6 +17,8 @@ function SgdMomentum:__init(module, criterion, kwargs)
     self.momentum = kwargs.momentum or 0.8
     self.shuffle_indices = kwargs.shuffle_indices or true
     self.mini_batch_size = kwargs.mini_batch_size or 5000
+    self.lambda = kwargs.lambda or 1e-2
+    self.reg = kwargs.reg
 end
 
 ---Convert time in seconds h
@@ -57,8 +59,10 @@ function SgdMomentum:train(dataset)
                       dataset[shuffled_indices[1]][2])
     local parameters, gradients = module:parameters()
     local prev_params = {}
+    local tmp_reg = {}
     for _, w in ipairs(parameters) do
         table.insert(prev_params, w:clone())
+        table.insert(tmp_reg, w:clone())
     end
 
     print("# SgdMomentum: training")
@@ -79,21 +83,29 @@ function SgdMomentum:train(dataset)
     local total_point_counter = 0
     while true do
 
-        local current_loss = 0
+        local check_loss = function(loss, total_loss, ltype)
+            if total_loss ~= total_loss
+                or total_loss == math.huge
+                or loss < 0 then
+                error("Error: "..ltype.."_loss="..loss
+                      ..", total_"..ltype.."_loss="..total_loss
+                      .." after processing "..total_point_counter.." points")
+            end
+        end
+
+        local lambda = self.lambda
+        local total_cri_loss = 0
+        local total_reg_loss = 0
         for t = 1, dataset:size() do
             local example = dataset[shuffled_indices[t]]
             local X = example[1]
             local Y = example[2]
             total_point_counter = total_point_counter + 1
 
-            local losst = criterion:forward(module:forward(X), Y)
-            current_loss = current_loss +  losst
-            if current_loss ~= current_loss
-                or current_loss == math.huge
-                or losst < 0 then
-                error("Error: losst="..losst..", current_loss="..current_loss
-                      .." after processing "..total_point_counter.." points")
-            end
+            local cri_loss = criterion:forward(module:forward(X), Y)
+            total_cri_loss = total_cri_loss +  cri_loss
+            check_loss(cri_loss, total_cri_loss, "cri")
+
             module:updateGradInput(X, criterion:updateGradInput(module.output, Y))
 
             -- Add momentum term to gradients.
@@ -107,6 +119,19 @@ function SgdMomentum:train(dataset)
                 gw:add(-self.momentum / current_learning_rate, w_prev)
                 w_prev:copy(w)
             end
+
+            -- Regularization.
+            local reg_loss = 0
+            if self.reg ~= nil then
+                for i, gw in ipairs(gradients) do
+                    local w = parameters[i]
+                    local tmp = tmp_reg[i]
+                    reg_loss = lambda * self.reg(w, gw)
+                    gw:add(lambda, tmp)
+                end
+            end
+            total_reg_loss = total_reg_loss + reg_loss
+            check_loss(reg_loss, total_reg_loss, "reg")
 
             module:accUpdateGradParameters(X, criterion.gradInput, current_learning_rate)
 
@@ -153,11 +178,14 @@ function SgdMomentum:train(dataset)
             self.hookIteration(self, iteration)
         end
 
-        local avg_current_loss = current_loss / dataset:size()
-        print("# avg loss = "..avg_current_loss)
+        local avg_cri_loss = total_cri_loss / dataset:size()
+        local avg_reg_loss = total_reg_loss / dataset:size()
+        local avg_loss = avg_cri_loss + avg_reg_loss
+        print(string.format("# avg loss = %.3e, avg cri loss = %.3e, avg reg loss = %.3e",
+                            avg_loss, avg_cri_loss, avg_reg_loss))
 
         -- Check convergence (expect decrease).
-        local err_delta = err_prev - avg_current_loss
+        local err_delta = err_prev - avg_loss
         if err_delta >= 0 and err_delta < self.converge_eps then
             print("# SgdMomentum: converged after "..iteration.." iterations")
             break
@@ -165,7 +193,7 @@ function SgdMomentum:train(dataset)
             print("# SgdMomentum: WARNING : avg loss increased by "
                   ..(-err_delta).." on iteration "..iteration)
         end
-        err_prev = avg_current_loss
+        err_prev = avg_loss
 
         if self.max_iteration > 0 and iteration >= self.max_iteration then
             print("# SgdMomentum: you have reached the maximum number of iterations")

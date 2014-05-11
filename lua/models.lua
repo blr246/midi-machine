@@ -122,20 +122,22 @@ function models.predict(model, x0, length)
     local input_wnd = model.dims.input[2]
     local output_wnd =  model.dims.output[2]
 
+    local total_size = output_wnd * length
     local channel_dims = model.dims.input[1]
-    local total_length = input_wnd + (output_wnd * length)
+    local total_length = input_wnd + total_size
     local x0_song = torch.Tensor(channel_dims, total_length)
-    local song = x0_song:narrow(2, input_wnd + 1, output_wnd * length)
+    local song = x0_song:narrow(2, input_wnd + 1, total_size)
 
     -- Copy first input to output buffer.
     x0_song:narrow(2, 1, input_wnd):copy(x0)
 
-    for offset = 1, length * output_wnd, output_wnd do
+    for offset = 1, total_size, output_wnd do
         -- Predict next output_wnd and copy to the song. 
         local X = x0_song:narrow(2, offset, input_wnd)
         local Y = model:forward(X)
         song:narrow(2, offset, output_wnd):copy(Y)
-        print(Y:max())
+        print(string.format("predict() : t=%d/%d, max_ouput=% .4f",
+                            offset, total_size, Y:max()))
     end
 
     return song
