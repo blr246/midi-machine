@@ -31,18 +31,6 @@ local function abs_to_raster_time(t_abs, t_min, gcd)
     return 1 + ((t_abs - t_min) / gcd)
 end
 
--- [0, 255] => [-1, 1]
-function dataset.default_from_byte(x)
-    return (x / 127.5) - 1
-    --return x / 255.0
-end
-
--- [-1, 1] => [0, 255]
-function dataset.default_to_byte(x)
-    return math.max(0, math.min(255, math.floor((x + 1) * 127.5)))
-    --return math.max(0, math.min(255, math.floor(x * 255.0)))
-end
-
 --- A simple clock converting raw clock time to raster time.
 local function raster_clock(t_min, t_max, gcd)
 
@@ -135,14 +123,10 @@ end
 -- We require hashing events by note and then sorting them by time.  The
 -- entire sequence length is known, so we create an empty bitmap and then
 -- fill in the notes where they occur.
---
--- :param function from_byte: Takes integer velocity from MIDI to
--- rasterized value.
-local function rasterize_song(channels, raster_clock, note_events, from_byte)
+local function rasterize_song(channels, raster_clock, note_events)
 
     local channel_note_dims = #channels * NOTE_DIMS
-    local min_value = from_byte(0)
-    local rasterized = torch.Tensor(channel_note_dims, raster_clock.raster_range):fill(min_value)
+    local rasterized = torch.zeros(channel_note_dims, raster_clock.raster_range)
 
     --print(note_events)
     --print(rasterized:size())
@@ -170,7 +154,7 @@ local function rasterize_song(channels, raster_clock, note_events, from_byte)
 
                 if event.midi == CODES.midi.note_on then
                     note_begin = clock
-                    velocity = from_byte(event.velocity)
+                    velocity = event.velocity
 
                 elseif event.midi == CODES.midi.note_off
                     and note_begin ~= nil then
@@ -275,10 +259,7 @@ local function make_source(filename, middata,
     }
 end
 
-local function load_sources(dir, time_sig, from_byte)
-    if nill == from_byte then
-        error("Must specify from_byte")
-    end
+local function load_sources(dir, time_sig)
 
     -- Get all midi files in path.
     local mid_files = {}
@@ -318,8 +299,7 @@ local function load_sources(dir, time_sig, from_byte)
               local rasterized = rasterize_song(
                       channel_order,
                       note_event_data.raster_clock,
-                      note_event_data.events,
-                      from_byte)
+                      note_event_data.events)
 
               print("Adding file "..file_path)
               print("time sig: "..note_event_data.time_sig)
@@ -394,15 +374,11 @@ end
 --:param input_len: the number of discrete time steps per input point X
 --:param target_len: the number of discrete time steps per target point Y
 --:param pct_train: the proportion of points to use as training data
---:param function from_byte: Takes integer velocity from MIDI to
 -- rasterized value (default transforms in [-1, 1]).
 --:return: train and test sets of pairs (X, Y)
-function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte)
+function dataset.load(dir, time_sig, input_len, target_len, pct_train)
 
-    -- Default from_byte has values in [-1, 1]
-    from_byte = from_byte or dataset.default_from_byte
-
-    sources = load_sources(dir, time_sig, from_byte)
+    sources = load_sources(dir, time_sig)
 
     -- For each valid source, split data into points and then partition into
     -- train and test sets. Each torch narrow() does not copy data so it can
@@ -434,15 +410,11 @@ end
 --:param input_len: the number of discrete time steps per input point X
 --:param unroll_len: number of times to unroll the network
 --:param pct_train: the proportion of points to use as training data
---:param function from_byte: Takes integer velocity from MIDI to
 -- rasterized value (default transforms in [-1, 1]).
 --:return: train and test sets of pairs (X, Y)
-function dataset.load_rnn(dir, time_sig, input_len, unroll_len, pct_train, from_byte)
+function dataset.load_rnn(dir, time_sig, input_len, unroll_len, pct_train)
 
-    -- Default from_byte has values in [-1, 1]
-    from_byte = from_byte or dataset.default_from_byte
-
-    sources = load_sources(dir, time_sig, from_byte)
+    sources = load_sources(dir, time_sig)
 
     -- For each valid source, split data into points and then partition into
     -- train and test sets. Each torch narrow() does not copy data so it can
@@ -554,9 +526,7 @@ end
 
 --- Transform a rasterized song into midi data using a dataset source to
 --specify base data such as tempos, instruments, and so fourth.
-function dataset.compose(from_source, song, debounce_thresh, to_byte)
-
-    to_byte = to_byte or dataset.default_to_byte
+function dataset.compose(from_source, song, debounce_thresh)
 
     -- Ignore jumps of +/- debounce_thresh.
     debounce_thresh = debounce_thresh or 0
@@ -610,7 +580,7 @@ function dataset.compose(from_source, song, debounce_thresh, to_byte)
                 if util.isnan(note_value_raw) then
                     velocity = 0
                 else
-                    velocity = to_byte(note_value_raw)
+                    velocity = note_value_raw
                 end
 
                 --print(channel, note_idx, velocity)

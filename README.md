@@ -93,7 +93,7 @@ $ th bin/main.lua -h 32 -t iso -o 20 -r -s 0.2 -w l2 midi/ 4/2-8-24-4-512 experi
 ```
 
 Note where the example song and model are saved. You can play the example song
-with `timidity` or use it with `./bin/jukebox.sh` to generate songs.
+with `timidity` or use the model with `./bin/jukebox.sh` to generate songs.
 
 The mid library
 ---------------

@@ -14,7 +14,7 @@ function SgdMomentum:__init(module, criterion, kwargs)
     self.learning_rate_decay = kwargs.learning_rate_decay or 0.1
     self.max_iteration = kwargs.max_iteration or 5
     self.converge_eps = kwargs.converge_eps or 1e-6
-    self.momentum = kwargs.momentum or 0.8
+    self.momentum = kwargs.momentum or 0.9
     self.shuffle_indices = kwargs.shuffle_indices or true
     self.mini_batch_size = kwargs.mini_batch_size or 5000
     self.lambda = kwargs.lambda or 1e-2
@@ -52,8 +52,6 @@ function SgdMomentum:train(dataset)
         end
     end
 
-    local err_prev = math.huge
-
     -- Initialize previous weights used to compute momentum.
     criterion:forward(module:forward(dataset[shuffled_indices[1]][1]),
                       dataset[shuffled_indices[1]][2])
@@ -81,6 +79,7 @@ function SgdMomentum:train(dataset)
     local iteration = 1
     local mini_batch_idx = 1
     local total_point_counter = 0
+    local avg_loss_prev = math.huge
     while true do
 
         local check_loss = function(loss, total_loss, ltype)
@@ -98,8 +97,7 @@ function SgdMomentum:train(dataset)
         local total_reg_loss = 0
         for t = 1, dataset:size() do
             local example = dataset[shuffled_indices[t]]
-            local X = example[1]
-            local Y = example[2]
+            local X, Y = example[1], example[2]
             total_point_counter = total_point_counter + 1
 
             local cri_loss = criterion:forward(module:forward(X), Y)
@@ -107,33 +105,41 @@ function SgdMomentum:train(dataset)
             check_loss(cri_loss, total_cri_loss, "cri")
 
             module:updateGradInput(X, criterion:updateGradInput(module.output, Y))
+            module:accGradParameters(X, criterion.gradInput)
 
-            -- Add momentum term to gradients.
-            local parameters, gradients = module:parameters()
-            for i, gw in ipairs(gradients) do
-                local w = parameters[i]
+            local reg_loss = 0
+            for i, w in ipairs(parameters) do
+                local gw = gradients[i]
+
+                -- Regularization
+                if self.reg ~= nil then
+                    --if i == 1 then
+                    --    print("||gw_prereg||", torch.norm(gw))
+                    --end
+                    local tmp = tmp_reg[i]
+                    reg_loss = lambda * self.reg(w, tmp)
+                    gw:add(lambda, tmp)
+                end
+
+                -- Compute momentum.
                 local w_prev = prev_params[i]
                 -- -\delta_w = w_{t-1} - w_t
                 w_prev:add(-1, w)
-                -- Update gradient with momentum term.
-                gw:add(-self.momentum / current_learning_rate, w_prev)
+                --if i == 1 then
+                --    print("||gw||", torch.norm(gw))
+                --    print("||momentum||", torch.norm(w_prev))
+                --    print("||w||", torch.norm(w))
+                --    print("")
+                --end
+                -- Update weight with momentum term.
+                w:add(-self.momentum, w_prev)
                 w_prev:copy(w)
-            end
-
-            -- Regularization.
-            local reg_loss = 0
-            if self.reg ~= nil then
-                for i, gw in ipairs(gradients) do
-                    local w = parameters[i]
-                    local tmp = tmp_reg[i]
-                    reg_loss = lambda * self.reg(w, gw)
-                    gw:add(lambda, tmp)
-                end
             end
             total_reg_loss = total_reg_loss + reg_loss
             check_loss(reg_loss, total_reg_loss, "reg")
 
-            module:accUpdateGradParameters(X, criterion.gradInput, current_learning_rate)
+            module:updateParameters((1 - self.momentum)  * current_learning_rate)
+            module:zeroGradParameters()
 
             if self.hookExample then
                 self.hookExample(self, example)
@@ -181,19 +187,19 @@ function SgdMomentum:train(dataset)
         local avg_cri_loss = total_cri_loss / dataset:size()
         local avg_reg_loss = total_reg_loss / dataset:size()
         local avg_loss = avg_cri_loss + avg_reg_loss
-        print(string.format("# avg loss = %.3e, avg cri loss = %.3e, avg reg loss = %.3e",
+        print(string.format("# avg loss = %.4e, avg cri loss = %.4e, avg reg loss = %.4e",
                             avg_loss, avg_cri_loss, avg_reg_loss))
 
         -- Check convergence (expect decrease).
-        local err_delta = err_prev - avg_loss
-        if err_delta >= 0 and err_delta < self.converge_eps then
+        local avg_loss_delta = avg_loss_prev - avg_loss
+        if avg_loss_delta >= 0 and avg_loss_delta < self.converge_eps then
             print("# SgdMomentum: converged after "..iteration.." iterations")
             break
-        elseif err_delta < 0 then
+        elseif avg_loss_delta < 0 then
             print("# SgdMomentum: WARNING : avg loss increased by "
-                  ..(-err_delta).." on iteration "..iteration)
+                  ..(-avg_loss_delta).." on iteration "..iteration)
         end
-        err_prev = avg_loss
+        avg_loss_prev = avg_loss
 
         if self.max_iteration > 0 and iteration >= self.max_iteration then
             print("# SgdMomentum: you have reached the maximum number of iterations")

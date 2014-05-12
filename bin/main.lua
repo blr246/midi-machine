@@ -46,7 +46,7 @@ end
 
 ---Compute weight initialization by searching for a value that does not give
 --nan, inf, or very large losses compared to the number of output dims.
-local find_stdv_init_weight = function(data, model, criterion)
+local find_stdv_init_weight = function(data, model, criterion, max_loss)
     local stdv = 1.0
     local initialized = false
     local num_good = 0
@@ -58,7 +58,7 @@ local find_stdv_init_weight = function(data, model, criterion)
             if num_good > 100 then
                 initialized = true
                 break
-            elseif loss == loss and loss < data[i][2]:nElement() then
+            elseif loss == loss and loss < max_loss then
                 num_good = num_good + 1
             else
                 stdv = stdv / 2
@@ -115,6 +115,7 @@ local ds = ds_func(args.INPUT_DIR,
                    args.input_window_size,
                    args.output_window_size,
                    args.dataset_train_split)
+models.normalize_data(ds)
 
 -- Show command-line options.
 for key, value in pairs(args) do
@@ -130,15 +131,34 @@ print('Num training: '..ds.data_train():size())
 local model, train_args
 if "iso" == args.model_type then
     model = models.simple_2lnn_iso(ds, args.hidden_units)
-    train_args = { learning_rate = 1e-2, mini_batch_size = 5000, learning_rate_decay = 0.1 }
+    train_args = {
+        learning_rate = 1e-2,
+        mini_batch_size = 5000,
+        learning_rate_decay = 0.1,
+        converge_eps = 1e-6,
+        momentum = 0.8,
+        lambda = 1e-3,
+    }
 elseif "cmb" == args.model_type then
     model = models.simple_2lnn_cmb(ds, args.hidden_units)
-    local lr = 1 / ds.num_train
-    train_args = { learning_rate = lr, mini_batch_size = 500, learning_rate_decay = 0.1 }
+    train_args = {
+        learning_rate = 1e-2,
+        mini_batch_size = 500,
+        learning_rate_decay = 0.1,
+        converge_eps = 1e-5,
+        momentum = 0.8,
+        lambda = 1e-3,
+    }
 elseif "iso+cmb" == args.model_type then
     model = models.simple_2lnn_iso_cmb(ds, args.hidden_units)
-    local lr = 1 / ds.num_train
-    train_args = { learning_rate = lr, mini_batch_size = 500, learning_rate_decay = 0.1 }
+    train_args = {
+        learning_rate = 1e-2,
+        mini_batch_size = 5000,
+        learning_rate_decay = 0.1,
+        converge_eps = 1e-2,
+        momentum = 0.8,
+        lambda = 1e-3,
+    }
 else
     error("Error: unknown model type "..args.model_type)
 end
@@ -147,10 +167,9 @@ end
 local train_model = args.rnn and nn.Rnn(model) or model
 
 -- Select criterion and initialize weights.
---local to_byte = mid.dataset.default_to_byte
---local criterion = nn.PerceptualLoss(to_byte)
-local criterion = nn.MSECriterion()
-local stdv = find_stdv_init_weight(ds.data_train(), train_model, criterion)
+local criterion = nn.PerceptualLoss()
+--local criterion = nn.MSECriterion()
+local stdv = find_stdv_init_weight(ds.data_train(), train_model, criterion, 128)
 train_model:reset(stdv)
 print("reset() weights with stdv="..stdv)
 

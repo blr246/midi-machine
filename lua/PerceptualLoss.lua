@@ -1,3 +1,5 @@
+require "models"
+
 require "nn"
 require "math"
 
@@ -5,16 +7,14 @@ local PerceptualLoss, parent = torch.class('nn.PerceptualLoss', 'nn.Criterion')
 
 ---Takes to_byte in order to suppress any gradient when
 --the resulting conversion to byte has zero loss.
-function PerceptualLoss:__init(to_byte, lambda)
+function PerceptualLoss:__init(lambda)
     parent.__init(self)
     self.t1 = torch.Tensor()
     self.sizeAverage = true
 
     self.lambda = self.lambda or 2
 
-    if nil == to_byte then
-        error("Must supply to_byte() function")
-    end
+    local to_byte = models.to_byte
 
     self.loss_func = function(_, xx, yy)
         local X = to_byte(xx)

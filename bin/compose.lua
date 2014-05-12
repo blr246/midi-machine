@@ -46,8 +46,8 @@ ds = mid.dataset.load(
         model.time_sig,
         model.dims.input[2],
         model.dims.output[2],
-        0
-        )
+        0)
+models.normalize_data(ds)
 
 date_str = os.date("%Y%m%d_%H%M%S")
 print('Date string: '..date_str)

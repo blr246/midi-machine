@@ -28,9 +28,13 @@ end
 function models.simple_2lnn_iso(ds, num_hidden)
 
     local mlp = models.append_ds_info(ds, nn.Sequential())
-    mlp:add(nn.Linear(mlp.dims.input[2], num_hidden))
+    local input_len = mlp.dims.input[2]
+    local output_len = mlp.dims.output[2]
+
+    mlp:add(nn.Linear(input_len, num_hidden))
     mlp:add(nn.RluMax())
-    mlp:add(nn.Linear(num_hidden, mlp.dims.output[2]))
+
+    mlp:add(nn.Linear(num_hidden, output_len))
 
     return mlp
 end
@@ -43,17 +47,26 @@ end
 function models.simple_2lnn_cmb(ds, num_hidden)
 
     local mlp = models.append_ds_info(ds, nn.Sequential())
+
     local num_notes = mlp.dims.input[1]
+    local input_len = mlp.dims.input[2]
+    local output_len = mlp.dims.output[2]
+
     -- By transposing, we extract features over the notes for each time slice.
     mlp:add(nn.Transpose({1, 2}))
     mlp:add(nn.Linear(num_notes, num_hidden))
     mlp:add(nn.RluMax())
-    -- Flatten the network.
-    local flattened_len = mlp.dims.input[2] * num_hidden
-    mlp:add(nn.Reshape(flattened_len))
+
+    -- Project down to num_hidden x 1.
+    mlp:add(nn.Transpose({1, 2}))
+    mlp:add(nn.Linear(input_len, 1))
+    mlp:add(nn.RluMax())
+
     -- Allow output channels to take features across notes.
-    mlp:add(nn.Linear(flattened_len, num_notes * mlp.dims.output[2]))
-    mlp:add(nn.Reshape(num_notes, mlp.dims.output[2]))
+    mlp:add(nn.Transpose({1, 2}))
+    mlp:add(nn.Linear(1, num_notes * output_len))
+    mlp:add(nn.Transpose({1, 2}))
+    mlp:add(nn.Reshape(num_notes, output_len))
 
     return mlp
 end
@@ -66,15 +79,24 @@ end
 function models.simple_2lnn_iso_cmb(ds, num_hidden)
 
     local mlp = models.append_ds_info(ds, nn.Sequential())
+
     local num_notes = mlp.dims.input[1]
-    mlp:add(nn.Linear(mlp.dims.input[2], num_hidden))
+    local input_len = mlp.dims.input[2]
+    local output_len = mlp.dims.output[2]
+
+    mlp:add(nn.Linear(input_len, num_hidden))
     mlp:add(nn.RluMax())
-    -- Flatten the network.
-    local flattened_len = num_notes * num_hidden
-    mlp:add(nn.Reshape(flattened_len))
+
+    -- Project down to num_hidden x 1.
+    mlp:add(nn.Transpose({1, 2}))
+    mlp:add(nn.Linear(num_notes, 1))
+    mlp:add(nn.RluMax())
+
     -- Allow output channels to take features across notes.
-    mlp:add(nn.Linear(flattened_len, num_notes * mlp.dims.output[2]))
-    mlp:add(nn.Reshape(num_notes, mlp.dims.output[2]))
+    mlp:add(nn.Transpose({1, 2}))
+    mlp:add(nn.Linear(num_hidden, num_notes * output_len))
+    mlp:add(nn.Transpose({1, 2}))
+    mlp:add(nn.Reshape(num_notes, output_len))
 
     return mlp
 end
@@ -108,6 +130,33 @@ function models.train_model(ds, model, criterion, train_args)
     return avg_train_loss, avg_test_loss
 end
 
+--- [0, 255] => [-1, 1]
+function models.from_byte(x)
+    if type(x) == "userdata" then
+        return x:div(127.5):add(-1)
+    else
+        return (x / 127.5) - 1
+    end
+end
+
+--- [-1, 1] => [0, 255]
+function models.to_byte(x)
+    if type(x) == "userdata" then
+        return x:map(x, function(xx)
+            return math.max(0, math.min(255, math.floor((xx + 1) * 127.5)))
+        end)
+    else
+        return math.max(0, math.min(255, math.floor((x + 1) * 127.5)))
+    end
+end
+
+---Transform data into range [-1, 1].
+function models.normalize_data(ds)
+    for _, source in ipairs(ds.sources) do
+        models.from_byte(source.data)
+    end
+end
+
 --- Predict a song by seeding with input window x0.
 -- :param number length: the length of the song in output windows
 function models.predict(model, x0, length)
@@ -135,12 +184,14 @@ function models.predict(model, x0, length)
         -- Predict next output_wnd and copy to the song. 
         local X = x0_song:narrow(2, offset, input_wnd)
         local Y = model:forward(X)
+        -- Normalize the output.
+        models.from_byte(models.to_byte(Y))
         song:narrow(2, offset, output_wnd):copy(Y)
         print(string.format("predict() : t=%d/%d, max_ouput=% .4f",
                             offset, total_size, Y:max()))
     end
 
-    return song
+    return models.to_byte(song)
 end
 
 return models
