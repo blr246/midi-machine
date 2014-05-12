@@ -67,14 +67,14 @@ function models.simple_2lnn_iso_cmb(ds, num_hidden)
 
     local mlp = models.append_ds_info(ds, nn.Sequential())
     local num_notes = mlp.dims.input[1]
-    mlp:add(nn.Linear(mlp.input.dims[2], num_hidden))
+    mlp:add(nn.Linear(mlp.dims.input[2], num_hidden))
     mlp:add(nn.RluMax())
     -- Flatten the network.
     local flattened_len = num_notes * num_hidden
     mlp:add(nn.Reshape(flattened_len))
     -- Allow output channels to take features across notes.
-    mlp:add(nn.Linear(flattened_len, num_notes * mlp.output.dims[2]))
-    mlp:add(nn.Reshape(num_notes, mlp.output.dims[2]))
+    mlp:add(nn.Linear(flattened_len, num_notes * mlp.dims.output[2]))
+    mlp:add(nn.Reshape(num_notes, mlp.dims.output[2]))
 
     return mlp
 end
