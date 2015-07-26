@@ -127,6 +127,10 @@ local date_str = os.date("%Y%m%d_%H%M%S")
 print('Date string: '..date_str)
 print('Num training: '..ds.data_train():size())
 
+-- The model path information.
+local model_filename = make_model_filename(args, date_str)
+local model_output_path = path.join(args.OUTPUT_DIR, model_filename)
+
 -- Model type requested. Use some default settings for the trainer.
 local model, train_args
 if "iso" == args.model_type then
@@ -138,6 +142,7 @@ if "iso" == args.model_type then
         converge_eps = 1e-6,
         momentum = 0.8,
         lambda = 1e-3,
+        model_output_path = model_output_path,
     }
 elseif "cmb" == args.model_type then
     model = models.simple_2lnn_cmb(ds, args.hidden_units)
@@ -148,6 +153,7 @@ elseif "cmb" == args.model_type then
         converge_eps = 1e-5,
         momentum = 0.8,
         lambda = 1e-3,
+        model_output_path = model_output_path,
     }
 elseif "iso+cmb" == args.model_type then
     model = models.simple_2lnn_iso_cmb(ds, args.hidden_units)
@@ -158,13 +164,20 @@ elseif "iso+cmb" == args.model_type then
         converge_eps = 1e-2,
         momentum = 0.8,
         lambda = 1e-3,
+        model_output_path = model_output_path,
     }
 else
     error("Error: unknown model type "..args.model_type)
 end
 
+-- Append command-line options to the model.
+for key, value in pairs(args) do
+    model[key] = value
+end
+
 -- Create RNN when requested.
 local train_model = args.rnn and nn.Rnn(model) or model
+train_args.save_model = model
 
 -- Select criterion and initialize weights.
 local criterion = nn.PerceptualLoss()
@@ -200,14 +213,7 @@ end
 local err_train, err_test = models.train_model(ds, train_model, criterion, train_args)
 print("avg error train/test", err_train, err_test)
 
--- Append command-line options to the model.
-for key, value in pairs(args) do
-    model[key] = value
-end
-
 -- Write out the model.
-local model_filename = make_model_filename(args, date_str)
-local model_output_path = path.join(args.OUTPUT_DIR, model_filename)
 torch.save(model_output_path, model)
 print("Wrote model "..model_output_path)
 

@@ -19,6 +19,8 @@ function SgdMomentum:__init(module, criterion, kwargs)
     self.mini_batch_size = kwargs.mini_batch_size or 5000
     self.lambda = kwargs.lambda or 1e-2
     self.reg = kwargs.reg
+    self.model_output_path = kwargs.model_output_path or nil
+    self.save_model = kwargs.save_model or self.module
 end
 
 ---Convert time in seconds h
@@ -178,6 +180,14 @@ function SgdMomentum:train(dataset)
                                     ihh, imm, iss,
                                     add, ahh, amm, ass))
             end
+        end
+
+        if self.model_output_path then
+            local model_output_path_iter =
+                string.format("%s.iter%04d", self.model_output_path, iteration)
+            torch.save(model_output_path_iter, self.save_model)
+            print(string.format("# SgdMomentum: wrote model %s on iteration %d",
+                                model_output_path_iter, iteration))
         end
 
         if self.hookIteration then

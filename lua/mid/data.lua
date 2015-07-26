@@ -107,7 +107,7 @@ function data.write(data, file)
 
     --- Check that result is true or else throw error(msg).
     local function check_result(result, msg)
-        if result ~= true then
+        if result == nil then
             error(msg)
         end
     end

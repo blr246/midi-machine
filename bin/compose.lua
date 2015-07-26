@@ -96,9 +96,6 @@ for i = 1, args.count do
     if args.play then
         local cmd = "timidity "..gen_output_path..">/dev/null 2>&1"
         print("Running "..cmd)
-        local ret = os.execute(cmd)
-        if ret ~= 0 then
-            error("Got code "..tostring(ret).." playing song")
-        end
+        os.execute(cmd)
     end
 end

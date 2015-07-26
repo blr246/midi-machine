@@ -7,6 +7,7 @@ require "nn"
 require "math"
 require "torch"
 
+require "Rleu"
 require "RluMax"
 require "SgdMomentum"
 
@@ -31,10 +32,14 @@ function models.simple_2lnn_iso(ds, num_hidden)
     local input_len = mlp.dims.input[2]
     local output_len = mlp.dims.output[2]
 
+    -- Project to num_notes x num_hidden.
     mlp:add(nn.Linear(input_len, num_hidden))
-    mlp:add(nn.RluMax())
+    mlp:add(nn.Rleu())
 
+    -- Project to num_notes x output_len.
     mlp:add(nn.Linear(num_hidden, output_len))
+
+    mlp:add(nn.Tanh())
 
     return mlp
 end
@@ -53,20 +58,26 @@ function models.simple_2lnn_cmb(ds, num_hidden)
     local output_len = mlp.dims.output[2]
 
     -- By transposing, we extract features over the notes for each time slice.
+
+    -- Transpose to input_len x num_notes and project to input_len x num_hidden.
     mlp:add(nn.Transpose({1, 2}))
     mlp:add(nn.Linear(num_notes, num_hidden))
-    mlp:add(nn.RluMax())
+    mlp:add(nn.Rleu())
 
-    -- Project down to num_hidden x 1.
+    -- Transpose to num_hidden x input_len and project to num_hidden x output_len.
     mlp:add(nn.Transpose({1, 2}))
-    mlp:add(nn.Linear(input_len, 1))
-    mlp:add(nn.RluMax())
+    mlp:add(nn.Linear(input_len, output_len))
+    mlp:add(nn.Rleu())
 
-    -- Allow output channels to take features across notes.
+    -- Transpose to output_len x num_hidden and project to output_len x num_notes.
     mlp:add(nn.Transpose({1, 2}))
-    mlp:add(nn.Linear(1, num_notes * output_len))
+    mlp:add(nn.Linear(num_hidden, num_notes))
+    mlp:add(nn.Rleu())
+
+    -- Transpose to num_notes x output_len.
     mlp:add(nn.Transpose({1, 2}))
-    mlp:add(nn.Reshape(num_notes, output_len))
+
+    mlp:add(nn.Tanh())
 
     return mlp
 end
@@ -79,24 +90,27 @@ end
 function models.simple_2lnn_iso_cmb(ds, num_hidden)
 
     local mlp = models.append_ds_info(ds, nn.Sequential())
-
-    local num_notes = mlp.dims.input[1]
     local input_len = mlp.dims.input[2]
     local output_len = mlp.dims.output[2]
 
+    -- Project to num_notes x num_hidden.
     mlp:add(nn.Linear(input_len, num_hidden))
-    mlp:add(nn.RluMax())
+    mlp:add(nn.Rleu())
 
-    -- Project down to num_hidden x 1.
+    -- Transpose to num_hidden x num_notes and project to num_hidden x num_hidden.
     mlp:add(nn.Transpose({1, 2}))
-    mlp:add(nn.Linear(num_notes, 1))
-    mlp:add(nn.RluMax())
+    mlp:add(nn.Linear(num_notes, num_hidden))
+    mlp:add(nn.Rleu())
 
-    -- Allow output channels to take features across notes.
+    -- Project to num_hidden x output_len.
+    mlp:add(nn.Linear(num_hidden, output_len))
+    mlp:add(nn.Rleu())
+
+    -- Transpose to output_len x num_hidden and project to output_len x num_notes.
     mlp:add(nn.Transpose({1, 2}))
-    mlp:add(nn.Linear(num_hidden, num_notes * output_len))
-    mlp:add(nn.Transpose({1, 2}))
-    mlp:add(nn.Reshape(num_notes, output_len))
+    mlp:add(nn.Linear(num_hidden, num_notes))
+
+    mlp:add(nn.Tanh())
 
     return mlp
 end
